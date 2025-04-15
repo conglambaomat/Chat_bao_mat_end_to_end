@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react'; // Import useMemo
 import { useAuthStore } from '../store/useAuthStore';
 import { useChatStore } from '../store/useChatStore';
 import { JSEncrypt } from 'jsencrypt';
@@ -8,10 +8,12 @@ import { Loader } from 'lucide-react';
 
 // Decryption function (mirrors encryption steps)
 const decryptMessage = async (encryptedBundle, privateKeyPem) => {
-    const { encryptedContent, encryptedKey, iv, authTag } = encryptedBundle;
+    // ... (decryption logic remains the same) ...
+     const { encryptedContent, encryptedKey, iv, authTag } = encryptedBundle;
     if (!privateKeyPem) {
         console.error("Decryption failed: Private key is missing.");
-        return { error: 'Missing private key.' };
+        // Return structure indicating error source
+        return { data: null, error: 'Missing private key.', isLoading: false };
     }
 
     try {
@@ -20,8 +22,7 @@ const decryptMessage = async (encryptedBundle, privateKeyPem) => {
         decryptor.setPrivateKey(privateKeyPem);
         const decryptedAesKeyBase64 = decryptor.decrypt(encryptedKey);
         if (!decryptedAesKeyBase64) {
-            // This can happen if the wrong key is used or data is corrupted
-            throw new Error("Failed to decrypt AES key. Check RSA keys.");
+            throw new Error("Failed to decrypt AES key. Check RSA keys or ensure the correct key is used.");
         }
 
         // 2. Convert decrypted AES key from Base64 to ArrayBuffer
@@ -42,7 +43,7 @@ const decryptMessage = async (encryptedBundle, privateKeyPem) => {
 
         // 5. Decrypt message content with AES-GCM
         const decryptedContentBuffer = await crypto.subtle.decrypt(
-            { name: "AES-GCM", iv: ivBuffer }, // AuthTag is often handled implicitly here
+            { name: "AES-GCM", iv: ivBuffer },
             aesKey,
             encryptedContentBuffer
         );
@@ -51,60 +52,67 @@ const decryptMessage = async (encryptedBundle, privateKeyPem) => {
         const decoder = new TextDecoder();
         const decryptedText = decoder.decode(decryptedContentBuffer);
 
-        return { decryptedText };
+        return { data: decryptedText, error: null, isLoading: false }; // Return structure
 
     } catch (error) {
-        console.error("Decryption failed:", error);
-        // Don't show toast for every failed decryption, could be annoying
-        // Consider logging or specific UI indication
-        return { error: `Decryption failed: ${error.message}` };
+        console.error(`Decryption failed for message ${encryptedBundle._id || 'UNKNOWN'}:`, error);
+        return { data: '[Decryption Error]', error: `Decryption failed: ${error.message}`, isLoading: false }; // Return structure
     }
 };
 
-const Message = ({ message }) => {
-    const { authUser, privateKey } = useAuthStore((state) => ({ authUser: state.authUser, privateKey: state.privateKey }));
-    const { selectedUser } = useChatStore((state) => ({ selectedUser: state.selectedUser }));
-    const [decryptedContent, setDecryptedContent] = useState('');
-    const [isDecrypting, setIsDecrypting] = useState(true);
-    const [error, setError] = useState('');
 
-    const isSender = message.senderId === authUser._id;
+const Message = ({ message }) => {
+    // Use individual selectors
+    const authUser = useAuthStore((state) => state.authUser);
+    const privateKey = useAuthStore((state) => state.privateKey);
+    const selectedUser = useChatStore((state) => state.selectedUser);
+
+    // Combine decryption state into one object
+    const [decryptionState, setDecryptionState] = useState({
+        data: null,
+        isLoading: true,
+        error: null,
+    });
+
+    const isSender = message.senderId === authUser?._id; // Add optional chaining for safety
     const chatClassName = isSender ? "chat-end" : "chat-start";
     const bubbleBgColor = isSender ? "bg-sky-500" : "bg-gray-600";
-    const profilePic = isSender ? authUser.profilePic : selectedUser.profilePic;
+    // Ensure selectedUser exists before accessing profilePic
+    const profilePic = isSender ? authUser?.profilePic : selectedUser?.profilePic;
     const formattedTime = formatMessageTime(message.createdAt);
 
     useEffect(() => {
         let isMounted = true;
-        setIsDecrypting(true);
-        setError('');
+        // Set initial loading state only when effect runs
+        setDecryptionState({ data: null, isLoading: true, error: null });
+
+        // Log the private key being used (REMOVE IN PRODUCTION)
+        // console.log(`Decrypting message ${message._id} with key:`, privateKey ? privateKey.substring(0, 30) + "..." : "MISSING/NULL");
+
+        if (!privateKey) {
+             if (isMounted) {
+                 setDecryptionState({ data: '[Missing Key]', isLoading: false, error: 'Private key missing for decryption.' });
+             }
+             return; // Stop if no private key
+        }
 
         decryptMessage(message, privateKey)
             .then(result => {
                 if (isMounted) {
-                    if (result.error) {
-                        setError(result.error);
-                        setDecryptedContent('[Decryption Error]'); // Show error indication
-                    } else {
-                        setDecryptedContent(result.decryptedText);
-                    }
-                    setIsDecrypting(false);
-                }
-            })
-            .catch(err => { // Should be caught within decryptMessage, but as fallback
-                if (isMounted) {
-                    console.error("Unexpected error during decryption:", err);
-                    setError('Unexpected decryption error.');
-                    setDecryptedContent('[Decryption Error]');
-                    setIsDecrypting(false);
+                    // Update state in one go
+                    setDecryptionState(result);
                 }
             });
+            // No need for .catch here as decryptMessage handles errors internally
 
-        return () => { isMounted = false; }; // Cleanup function
-    }, [message, privateKey]); // Re-decrypt if message or private key changes
+        return () => { isMounted = false; };
+    }, [message, privateKey]); // Dependencies remain the same
 
-    // Basic check for base64 image data
-    const isImage = decryptedContent.startsWith('data:image');
+
+    // Use useMemo to compute isImage only when decrypted data changes
+    const isImage = useMemo(() => {
+        return typeof decryptionState.data === 'string' && decryptionState.data.startsWith('data:image');
+    }, [decryptionState.data]);
 
     return (
         <div className={`chat ${chatClassName}`}>
@@ -114,14 +122,14 @@ const Message = ({ message }) => {
                 </div>
             </div>
             <div className={`chat-bubble ${bubbleBgColor} text-white pb-2 px-3 break-words`}>
-                {isDecrypting ? (
+                {decryptionState.isLoading ? (
                     <Loader className="size-4 animate-spin my-1" />
-                ) : error ? (
-                    <span className="text-red-300 text-xs">{decryptedContent}</span>
+                ) : decryptionState.error ? (
+                    <span className="text-red-300 text-xs italic">{decryptionState.data} ({decryptionState.error})</span>
                 ) : isImage ? (
-                    <img src={decryptedContent} alt="Sent image" className="max-w-xs rounded-md mt-2" />
+                    <img src={decryptionState.data} alt="Sent image" className="max-w-xs rounded-md mt-2" />
                 ) : (
-                    decryptedContent
+                    decryptionState.data // Render decrypted text
                 )}
             </div>
             <div className="chat-footer opacity-50 text-xs flex gap-1 items-center mt-1">

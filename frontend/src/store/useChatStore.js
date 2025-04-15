@@ -34,10 +34,8 @@ export const useChatStore = create((set, get) => ({
             toast.error(error.response?.data?.message || "Failed to fetch users");
             set({ isUsersLoading: false }); // Ensure loading is reset on error
         }
-        // Removed finally block as loading is handled within try/catch
     },
 
-    // REFACTORED getMessages: Manages its loading state more directly
     getMessages: async (userId) => {
         set({ isMessagesLoading: true, messages: [] }); // Set loading true, clear messages
         try {
@@ -49,7 +47,6 @@ export const useChatStore = create((set, get) => ({
             toast.error(error.response?.data?.message || "Failed to fetch messages");
             set({ messages: [], isMessagesLoading: false }); // Clear messages and set loading false on error
         }
-        // Removed finally block as loading is handled within try/catch
     },
 
     sendMessage: async (encryptedBundle) => {
@@ -61,108 +58,141 @@ export const useChatStore = create((set, get) => ({
         }
 
         try {
-            const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, encryptedBundle);
-            // Add the message (still encrypted) to the local state immediately
-            set((state) => ({
-                messages: [...state.messages, res.data],
-                isSendingMessage: false // Set sending false after successful addition
-            }));
+            // Make the POST request
+            await axiosInstance.post(`/messages/send/${selectedUser._id}`, encryptedBundle);
+
+            // ---- STATE UPDATE REMOVED ----
+            // The "newMessage" event received via socket will handle adding the message to the list.
+
+            // Just set loading state back to false
+            set({ isSendingMessage: false });
 
         } catch (error) {
             console.error("Error sending message:", error);
-            toast.error(error.response?.data?.message || "Failed to send message");
+            // Extract backend error message if available
+            const errorMsg = error.response?.data?.error || error.message || "Failed to send message";
+            toast.error(errorMsg);
             set({ isSendingMessage: false }); // Ensure sending is reset on error
         }
-        // Removed finally block
     },
 
     subscribeToMessages: () => {
         const socket = useAuthStore.getState().socket;
         if (!socket) return;
 
-        socket.off("newMessage"); // Remove previous listener
+        socket.off("newMessage"); // Ensure no duplicate listeners
         socket.on("newMessage", (newMessage) => {
-            const selectedUser = get().selectedUser; // Use get() instead of destructuring
+            // console.log("Received newMessage event:", newMessage); // Optional: Debug log
+            const selectedUser = get().selectedUser;
             const currentAuthUser = useAuthStore.getState().authUser;
 
-            if (!selectedUser || !currentAuthUser) {
-                console.log("Cannot process new message: No selected user or authenticated user.");
+            if (!currentAuthUser) {
+                console.log("Cannot process new message: Authenticated user not found.");
                 return;
             }
 
-            const isFromSelectedUser = newMessage.senderId === selectedUser._id;
-            const isToCurrentUser = newMessage.receiverId === currentAuthUser._id;
-
-            if (isFromSelectedUser && isToCurrentUser) {
-                set((state) => ({
-                    messages: state.messages.concat(newMessage)
-                }));
-            } else {
-                console.log("Received message from other user/chat", newMessage);
+            // Check if the message object or its _id is valid
+            if (!newMessage || !newMessage._id) {
+                console.log("Received invalid newMessage object:", newMessage);
+                return;
             }
+
+            // Determine if the message belongs to the currently selected chat
+            const isFromSelectedUser = newMessage.senderId === selectedUser?._id;
+            const isToCurrentUser = newMessage.receiverId === currentAuthUser._id;
+            const isFromCurrentUser = newMessage.senderId === currentAuthUser._id;
+            const isToSelectedUser = newMessage.receiverId === selectedUser?._id;
+
+            // Add message if it's between the current user and the selected user
+            if ((isFromSelectedUser && isToCurrentUser) || (isFromCurrentUser && isToSelectedUser)) {
+                // Check for duplicates using _id before adding
+                const messageExists = get().messages.some(msg => msg._id === newMessage._id);
+                if (!messageExists) {
+                    // console.log("Adding new message to state:", newMessage); // Optional: Debug log
+                    set((state) => ({
+                        // Use concat or spread, ensure immutability
+                        messages: [...state.messages, newMessage]
+                    }));
+                }
+                // else {
+                //    console.log("Skipping duplicate message received via socket:", newMessage._id); // Optional: Debug log
+                // }
+            }
+            // else {
+                // console.log("Received message not for current chat:", newMessage); // Optional: Debug log
+                // Handle notification for other chats if needed
+            // }
         });
     },
 
     unsubscribeFromMessages: () => {
         const socket = useAuthStore.getState().socket;
         if (socket) {
-             socket.off("newMessage");
+            socket.off("newMessage");
         }
     },
 
-    // REFACTORED setSelectedUser to be more stable
+    // REVISED setSelectedUser to minimize state updates and add logging
     setSelectedUser: async (newUser) => {
         const currentSelectedUser = get().selectedUser;
-        
-        // Early return if same user
+
+        // 1. Early return if same user
         if (currentSelectedUser?._id === newUser?._id) {
             return;
         }
 
-        // Unsubscribe first
+        // 2. Unsubscribe from previous user's messages
         get().unsubscribeFromMessages();
 
-        // Handle null case
+        // 3. Handle null case
         if (!newUser) {
             set({ selectedUser: null, messages: [], isMessagesLoading: false });
             return;
         }
 
-        try {
-            // Set loading state
-            set({ isMessagesLoading: true, messages: [] });
+        // 4. Set initial loading state (optimistically set user, clear messages)
+        set({ selectedUser: newUser, isMessagesLoading: true, messages: [] });
 
-            // Get public key if needed
-            let userWithKey = { ...newUser };
-            if (!newUser.publicKey) {
-                const publicKey = await fetchPublicKey(newUser._id);
+        try {
+            let finalUser = { ...newUser }; // Start with the input user
+
+            // 5. Fetch public key if needed
+            if (!finalUser.publicKey) {
+                const publicKey = await fetchPublicKey(finalUser._id);
                 if (!publicKey) {
-                    throw new Error(`Could not get public key for ${newUser.fullName}`);
+                    throw new Error(`Could not get public key for ${finalUser.fullName}`);
                 }
-                userWithKey.publicKey = publicKey;
+                finalUser.publicKey = publicKey;
             }
 
-            // Set user first
-            set({ selectedUser: userWithKey });
+            // 6. Fetch messages using the final user ID
+            const res = await axiosInstance.get(`/messages/${finalUser._id}`);
+            const fetchedMessages = res.data;
 
-            // Then get messages
-            const res = await axiosInstance.get(`/messages/${userWithKey._id}`);
-            set({ 
-                messages: res.data,
-                isMessagesLoading: false 
-            });
+            // 7. Final state update: Set messages, clear loading, confirm final user object
+            if (get().selectedUser?._id === finalUser._id) {
+                set({
+                    messages: fetchedMessages,
+                    isMessagesLoading: false,
+                    selectedUser: finalUser // Ensure the user object with the key is stored
+                });
 
-            // Finally subscribe
-            get().subscribeToMessages();
+                // 8. Subscribe to messages for the new user *after* state is stable
+                get().subscribeToMessages();
+            }
 
         } catch (error) {
-            console.error("Error in setSelectedUser:", error);
+            console.error(`setSelectedUser: Error processing user ${newUser._id}:`, error);
             toast.error(error.message || "Failed to load chat");
-            set({ 
-                selectedUser: null, 
-                messages: [], 
-                isMessagesLoading: false 
+
+            // 9. Catch errors: Reset state only if the error belongs to the currently selected user
+            set((state) => {
+                if (state.selectedUser?._id === newUser._id) {
+                    return { selectedUser: null, messages: [], isMessagesLoading: false };
+                }
+                return {}; // Return empty object to indicate no state change
             });
         }
     },
+
 }));

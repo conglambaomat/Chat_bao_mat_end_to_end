@@ -11,23 +11,24 @@ const generateKeys = () => {
     const crypt = new JSEncrypt({ default_key_size: 2048 }); // Use 2048-bit keys
     const privateKey = crypt.getPrivateKey();
     const publicKey = crypt.getPublicKey();
+    console.log("New RSA keys generated.");
     return { privateKey, publicKey };
 };
 
-// Helper function to update public key on backend
-const updatePublicKeyOnServer = async (publicKey) => {
-    try {
-        await axiosInstance.put("/auth/update-profile", { publicKey });
-        console.log("Public key updated on server.");
-    } catch (error) {
-        console.error("Error updating public key on server:", error);
-        toast.error("Failed to sync public key with server.");
-    }
-};
+// // Helper function to update public key on backend (Keep for potential future use if needed)
+// const updatePublicKeyOnServer = async (publicKey) => {
+//     try {
+//         await axiosInstance.put("/auth/update-profile", { publicKey });
+//         console.log("Public key updated on server.");
+//     } catch (error) {
+//         console.error("Error updating public key on server:", error);
+//         toast.error("Failed to sync public key with server.");
+//     }
+// };
 
 export const useAuthStore = create((set, get) => ({
     authUser: null,
-    privateKey: null, // Add state for private key (loaded from localStorage)
+    privateKey: null, // Private key state
     isSigningUp: false,
     isLoggingIn: false,
     isUpdatingProfile: false,
@@ -35,55 +36,32 @@ export const useAuthStore = create((set, get) => ({
     onlineUsers: [],
     socket: null,
 
-    // Function to initialize keys
-    initializeKeys: async () => {
-        let storedPrivateKey = localStorage.getItem("privateKey");
-        let storedPublicKey = localStorage.getItem("publicKey"); // Also store public key for quick access
-        let authUserData = get().authUser; // Get current authUser state
+    // Function to load keys FROM localStorage only
+    loadKeysFromStorage: () => {
+        const storedPrivateKey = localStorage.getItem("privateKey");
+        // const storedPublicKey = localStorage.getItem("publicKey"); // Optional: Load public key too if needed directly
 
-        if (!storedPrivateKey || !storedPublicKey) {
-            console.log("Generating new RSA keys...");
-            const { privateKey, publicKey } = generateKeys();
-            localStorage.setItem("privateKey", privateKey);
-            localStorage.setItem("publicKey", publicKey);
-            storedPrivateKey = privateKey;
-            storedPublicKey = publicKey;
-            console.log("Keys generated and stored in localStorage.");
-
-            // If user is already logged in, update key on server immediately
-            if (authUserData && authUserData._id) {
-                await updatePublicKeyOnServer(publicKey);
-                // Update authUser state with the new public key
-                set({ authUser: { ...authUserData, publicKey: publicKey } });
-            }
+        if (storedPrivateKey) {
+            set({ privateKey: storedPrivateKey });
+            console.log("Private key loaded from localStorage.");
         } else {
-            console.log("Keys loaded from localStorage.");
+            set({ privateKey: null }); // Ensure privateKey is null if not found
+            console.log("Private key not found in localStorage.");
         }
-
-        set({ privateKey: storedPrivateKey }); // Set privateKey in store state
-
-        // Ensure authUser state has the correct public key from storage
-        if (authUserData && authUserData.publicKey !== storedPublicKey) {
-             set({ authUser: { ...authUserData, publicKey: storedPublicKey } });
-             // If server key is missing/different, update it
-             if (!authUserData.publicKey) {
-                await updatePublicKeyOnServer(storedPublicKey);
-             }
-        }
+        // We don't generate keys here anymore
     },
 
     checkAuth: async () => {
         set({ isCheckingAuth: true });
         try {
             const res = await axiosInstance.get("/auth/check");
-            set({ authUser: res.data });
-            await get().initializeKeys(); // Initialize keys after checking auth
+            set({ authUser: res.data }); // Set user data first
+            get().loadKeysFromStorage(); // Then load keys associated with this device storage
             get().connectSocket();
         } catch (error) {
-            console.log("Error in checkAuth:", error);
-            set({ authUser: null, privateKey: null }); // Clear private key if not authenticated
-            localStorage.removeItem("privateKey"); // Clear keys from storage on auth failure
-            localStorage.removeItem("publicKey");
+            console.log("CheckAuth: User not authenticated or error occurred.");
+            set({ authUser: null, privateKey: null }); // Clear user and key
+            // Don't clear localStorage here, maybe user just needs to log in again
         } finally {
             set({ isCheckingAuth: false });
         }
@@ -91,18 +69,32 @@ export const useAuthStore = create((set, get) => ({
 
     signup: async (data) => {
         set({ isSigningUp: true });
+        let generatedPrivateKey = null; // Keep track of the generated private key
         try {
-            // Ensure keys are generated before signup
-            await get().initializeKeys();
-            const publicKey = localStorage.getItem("publicKey"); // Get the generated public key
+            // 1. Generate NEW keys for the new user
+            const { privateKey, publicKey } = generateKeys();
+            generatedPrivateKey = privateKey; // Store for setting state later
 
-            const res = await axiosInstance.post("/auth/signup", { ...data, publicKey }); // Send publicKey with signup data
-            set({ authUser: res.data }); // Server response should now include publicKey
+            // 2. Save keys to localStorage for this device
+            localStorage.setItem("privateKey", privateKey);
+            localStorage.setItem("publicKey", publicKey);
+            console.log("New keys saved to localStorage during signup.");
+
+            // 3. Send signup data INCLUDING the new public key
+            const res = await axiosInstance.post("/auth/signup", { ...data, publicKey });
+
+            // 4. Set auth state (user data + the generated private key)
+            set({ authUser: res.data, privateKey: generatedPrivateKey });
             toast.success("Account created successfully");
             get().connectSocket();
+
         } catch (error) {
             console.error("Error during signup:", error);
             toast.error(error.response?.data?.message || "Signup failed");
+            // Clear keys from storage if signup fails to prevent dangling keys
+            localStorage.removeItem("privateKey");
+            localStorage.removeItem("publicKey");
+            set({ privateKey: null }); // Clear private key state
         } finally {
             set({ isSigningUp: false });
         }
@@ -112,16 +104,17 @@ export const useAuthStore = create((set, get) => ({
         set({ isLoggingIn: true });
         try {
             const res = await axiosInstance.post("/auth/login", data);
-            set({ authUser: res.data }); // Server response includes publicKey
-            await get().initializeKeys(); // Initialize/load keys after login
+            // Set authUser first (contains public key from DB)
+            set({ authUser: res.data });
+            // Attempt to load the private key corresponding to this device/browser
+            get().loadKeysFromStorage();
             toast.success("Logged in successfully");
             get().connectSocket();
         } catch (error) {
             console.error("Error during login:", error);
             toast.error(error.response?.data?.message || "Login failed");
-            localStorage.removeItem("privateKey"); // Clear keys on login failure
-            localStorage.removeItem("publicKey");
-            set({ privateKey: null });
+            // Don't clear localStorage keys on login failure, user might try again
+            set({ authUser: null, privateKey: null }); // Clear state
         } finally {
             set({ isLoggingIn: false });
         }
@@ -130,33 +123,29 @@ export const useAuthStore = create((set, get) => ({
     logout: async () => {
         try {
             await axiosInstance.post("/auth/logout");
+        } catch (error) {
+             // Log error but proceed with client-side cleanup
+             console.error("Error during server logout:", error);
+             toast.error(error.response?.data?.message || "Server logout failed, clearing client state.");
+        } finally {
+            // Always perform client-side cleanup
             get().disconnectSocket(); // Disconnect socket first
             set({ authUser: null, privateKey: null }); // Clear user and private key state
             localStorage.removeItem("privateKey"); // Remove private key from storage
             localStorage.removeItem("publicKey"); // Remove public key from storage
+            console.log("Cleared keys from localStorage on logout.");
             toast.success("Logged out successfully");
-        } catch (error) {
-            console.error("Error during logout:", error);
-            toast.error(error.response?.data?.message || "Logout failed");
         }
     },
 
-    // Modified updateProfile to potentially update keys if needed (e.g., if user clears storage)
+    // updateProfile might need adjustment if public key needs changing,
+    // but for now, focus is on fixing the decryption loop.
     updateProfile: async (data) => {
         set({ isUpdatingProfile: true });
         try {
-            // Ensure keys are initialized before updating profile
-            await get().initializeKeys();
-            const currentPublicKey = localStorage.getItem("publicKey");
-
-            // Include currentPublicKey if not already in data, ensures server has it
-            const updateData = { ...data };
-            if (!updateData.publicKey && currentPublicKey) {
-                updateData.publicKey = currentPublicKey;
-            }
-
-            const res = await axiosInstance.put("/auth/update-profile", updateData);
-            set({ authUser: res.data }); // Update authUser with response (includes potentially updated key)
+            // We don't need to load/check keys here unless updating the key itself
+            const res = await axiosInstance.put("/auth/update-profile", data);
+            set({ authUser: res.data });
             toast.success("Profile updated successfully");
         } catch (error) {
             console.log("error in update profile:", error);
@@ -167,24 +156,57 @@ export const useAuthStore = create((set, get) => ({
     },
 
     connectSocket: () => {
-        const { authUser } = get();
-        if (!authUser || get().socket?.connected) return;
+       const { authUser, socket } = get(); // Get current socket state too
+        // Prevent reconnecting if already connected
+        if (!authUser || socket?.connected) {
+            // console.log("Socket connection skipped (no authUser or already connected)");
+            return;
+        }
 
-        const socket = io(BASE_URL, {
+        console.log(`Attempting to connect socket for user: ${authUser._id}`);
+        const newSocket = io(BASE_URL, {
             query: {
                 userId: authUser._id,
             },
+            // Optional: Add reconnection attempts, etc.
+            // reconnectionAttempts: 5,
+            // reconnectionDelay: 1000,
         });
-        socket.connect();
 
-        set({ socket: socket });
+        newSocket.on("connect", () => {
+             console.log("Socket connected:", newSocket.id);
+             set({ socket: newSocket }); // Update state only on successful connect
+        });
 
-        socket.on("getOnlineUsers", (userIds) => {
+        newSocket.on("disconnect", (reason) => {
+            console.log("Socket disconnected:", reason);
+             // Check if disconnect was initiated by client (logout) or server/network issue
+             // No need to clear socket state here if it might reconnect,
+             // but handle potential cleanup if disconnect is permanent.
+             // set({ socket: null }); // Maybe only if reason is 'io client disconnect'
+        });
+
+        newSocket.on("connect_error", (error) => {
+            console.error("Socket connection error:", error);
+            toast.error(`Socket connection failed: ${error.message}`);
+            // Don't set socket to null immediately, io attempts reconnection by default
+        });
+
+
+        newSocket.on("getOnlineUsers", (userIds) => {
             set({ onlineUsers: userIds });
         });
+
+        // No need to call connect() explicitly, io() initiates connection
+
     },
     disconnectSocket: () => {
-        if (get().socket?.connected) get().socket.disconnect();
-        set({ socket: null, onlineUsers: [] }); // Clear socket and online users
+        const currentSocket = get().socket;
+        if (currentSocket?.connected) {
+            console.log("Disconnecting socket explicitly.");
+            currentSocket.disconnect();
+        }
+         // Always clear socket state and online users on explicit disconnect
+        set({ socket: null, onlineUsers: [] });
     },
 }));

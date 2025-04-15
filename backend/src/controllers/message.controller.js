@@ -44,13 +44,13 @@ export const getMessages = async (req, res) => {
 export const sendMessage = async (req, res) => {
   try {
     // Receive the encrypted bundle from the client
-    const { encryptedContent, encryptedKey, iv, authTag } = req.body;
+    const { encryptedContent, encryptedKey, iv, authTag } = req.body; // authTag is still received but not strictly validated if empty
     const { id: receiverId } = req.params;
     const senderId = req.user._id;
 
-    // Validate required fields
-    if (!encryptedContent || !encryptedKey || !iv || !authTag) {
-        return res.status(400).json({ error: "Missing required encrypted data fields." });
+    // Validate required fields (REMOVED !authTag check)
+    if (!encryptedContent || !encryptedKey || !iv ) { // Check only essential fields
+        return res.status(400).json({ error: "Missing required encrypted data fields (content, key, or iv)." });
     }
 
     // No server-side decryption or image upload needed here anymore
@@ -62,7 +62,8 @@ export const sendMessage = async (req, res) => {
       encryptedContent,
       encryptedKey,
       iv,
-      authTag,
+      // Store authTag even if it's empty, in case decryption needs it (though unlikely with WebCrypto default behavior)
+      authTag: authTag || "", // Store it, defaulting to empty string if undefined/null
     });
 
     await newMessage.save();

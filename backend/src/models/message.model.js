@@ -30,7 +30,7 @@ const messageSchema = new mongoose.Schema(
     // Stores the Authentication Tag for AES-GCM
     authTag: {
         type: String, // Base64 encoded
-        required: true,
+        //required: true,
     },
     // Optional: Keep original fields for compatibility or remove them
     // text: { type: String },

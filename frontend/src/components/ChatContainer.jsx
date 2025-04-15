@@ -7,28 +7,32 @@ import MessageSkeleton from "./skeletons/MessageSkeleton";
 import Message from "./Message"; // Import the new Message component
 
 const ChatContainer = () => {
-    const {
-        messages, // These are now encrypted messages
-        isMessagesLoading,
-        selectedUser,
-    } = useChatStore((state) => ({
-        messages: state.messages,
-        isMessagesLoading: state.isMessagesLoading,
-        selectedUser: state.selectedUser,
-    }));
+    // Select state slices individually for better performance and stability
+    const messages = useChatStore((state) => state.messages);
+    const isMessagesLoading = useChatStore((state) => state.isMessagesLoading);
+    // We might not need selectedUser directly here if only ChatHeader uses it.
+    // ChatHeader can select it itself if needed.
+    // const selectedUser = useChatStore((state) => state.selectedUser);
+
     const messageEndRef = useRef(null);
 
-    // Removed useEffect for getMessages, subscribe, unsubscribe - this is now handled in setSelectedUser in useChatStore
+    // Removed useEffect for getMessages, subscribe, unsubscribe - handled in useChatStore
 
     useEffect(() => {
         // Scroll to bottom whenever messages change
-        if (messageEndRef.current) {
-            messageEndRef.current.scrollIntoView({ behavior: "smooth" });
-        }
-    }, [messages]);
+        // Use setTimeout to ensure scrolling happens after render potentially settles
+        const timer = setTimeout(() => {
+            if (messageEndRef.current) {
+                messageEndRef.current.scrollIntoView({ behavior: "smooth" });
+            }
+        }, 0); // Timeout 0 pushes execution after the current call stack
+
+        return () => clearTimeout(timer); // Cleanup timeout on unmount or before next effect run
+    }, [messages]); // Dependency remains messages
 
     return (
         <div className="flex-1 flex flex-col overflow-auto">
+            {/* Pass selectedUser to ChatHeader if it needs it, or let ChatHeader select it */}
             <ChatHeader />
 
             {/* Message display area */}
@@ -45,13 +49,13 @@ const ChatContainer = () => {
                 {/* Render decrypted messages using the Message component */}
                 {!isMessagesLoading && messages.map((message, index) => (
                     <Message
-                        key={message._id || `msg-${index}`} // Use index as fallback key if _id isn't immediately available
+                        key={message._id || `msg-${index}`} // Use index as fallback key
                         message={message}
                     />
                 ))}
 
-                {/* Empty div to scroll to */} 
-                <div ref={messageEndRef} /> 
+                {/* Empty div to scroll to */}
+                <div ref={messageEndRef} />
             </div>
 
             <MessageInput />
