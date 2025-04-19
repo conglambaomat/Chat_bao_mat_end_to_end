@@ -59,6 +59,15 @@ const Sidebar = () => {
                 alt={user.name}
                 className="size-12 object-cover rounded-full"
               />
+              {/* Unread Count Badge */}
+              {user.unreadCount > 0 && (
+                <span 
+                  className="absolute -top-1 -right-1 flex items-center justify-center size-5 
+                            bg-red-500 text-white text-xs font-bold rounded-full"
+                >
+                  {user.unreadCount}
+                </span>
+              )}
               {onlineUsers.includes(user._id) && (
                 <span
                   className="absolute bottom-0 right-0 size-3 bg-green-500 
@@ -68,10 +77,14 @@ const Sidebar = () => {
             </div>
 
             {/* User info - only visible on larger screens */}
-            <div className="hidden lg:block text-left min-w-0">
-              <div className="font-medium truncate">{user.fullName}</div>
-              <div className="text-sm text-zinc-400">
-                {onlineUsers.includes(user._id) ? "Online" : "Offline"}
+            <div className="hidden lg:flex items-center gap-2 text-left min-w-0">
+              <div className="flex flex-col min-w-0">
+                <div className="font-medium truncate flex items-center gap-1.5">
+                  <span className="truncate">{user.fullName}</span>
+                </div>
+                <div className="text-sm text-zinc-400">
+                  {onlineUsers.includes(user._id) ? "Online" : "Offline"}
+                </div>
               </div>
             </div>
           </button>

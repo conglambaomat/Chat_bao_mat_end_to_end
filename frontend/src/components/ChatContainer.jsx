@@ -1,5 +1,6 @@
 import { useChatStore } from "../store/useChatStore";
-import { useEffect, useRef } from "react";
+import { useAuthStore } from "../store/useAuthStore";
+import { useEffect, useRef, useCallback } from "react";
 
 import ChatHeader from "./ChatHeader";
 import MessageInput from "./MessageInput";
@@ -10,33 +11,44 @@ const ChatContainer = () => {
     // Select state slices individually for better performance and stability
     const messages = useChatStore((state) => state.messages);
     const isMessagesLoading = useChatStore((state) => state.isMessagesLoading);
-    // We might not need selectedUser directly here if only ChatHeader uses it.
-    // ChatHeader can select it itself if needed.
-    // const selectedUser = useChatStore((state) => state.selectedUser);
+    const selectedUser = useChatStore((state) => state.selectedUser);
+    const setupMessageListeners = useChatStore((state) => state.setupMessageListeners);
+    const hasNewMessages = useChatStore((state) => state.hasNewMessages);
+    
+    // Socket from auth store
+    const socket = useAuthStore((state) => state.socket);
 
     const messageEndRef = useRef(null);
+    const containerRef = useRef(null);
 
-    // Removed useEffect for getMessages, subscribe, unsubscribe - handled in useChatStore
-
+    // Khởi tạo socket listeners khi component mount hoặc socket thay đổi
     useEffect(() => {
-        // Scroll to bottom whenever messages change
-        // Use setTimeout to ensure scrolling happens after render potentially settles
+        if (socket) {
+            setupMessageListeners();
+        }
+    }, [socket, setupMessageListeners]);
+
+    // Cuộn xuống tin nhắn mới
+    useEffect(() => {
+        // Scroll to bottom whenever messages change or new messages arrive
         const timer = setTimeout(() => {
             if (messageEndRef.current) {
-                messageEndRef.current.scrollIntoView({ behavior: "smooth" });
+                messageEndRef.current.scrollIntoView({ behavior: hasNewMessages ? "smooth" : "auto" });
             }
-        }, 0); // Timeout 0 pushes execution after the current call stack
+        }, 0);
 
-        return () => clearTimeout(timer); // Cleanup timeout on unmount or before next effect run
-    }, [messages]); // Dependency remains messages
+        return () => clearTimeout(timer);
+    }, [messages, hasNewMessages]);
 
     return (
         <div className="flex-1 flex flex-col overflow-auto">
-            {/* Pass selectedUser to ChatHeader if it needs it, or let ChatHeader select it */}
             <ChatHeader />
 
             {/* Message display area */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            <div 
+                ref={containerRef}
+                className="flex-1 overflow-y-auto p-4 space-y-2"
+            >
                 {/* Show loading skeleton while messages are loading */}
                 {isMessagesLoading && (
                     <>
@@ -46,13 +58,23 @@ const ChatContainer = () => {
                     </>
                 )}
 
+                {/* Hiển thị tin nhắn */}
+                {!isMessagesLoading && messages.length === 0 && selectedUser && (
+                    <div className="text-center text-zinc-500 py-8">
+                        Không có tin nhắn. Hãy bắt đầu cuộc trò chuyện!
+                    </div>
+                )}
+
                 {/* Render decrypted messages using the Message component */}
-                {!isMessagesLoading && messages.map((message, index) => (
-                    <Message
-                        key={message._id || `msg-${index}`} // Use index as fallback key
-                        message={message}
-                    />
-                ))}
+                {!isMessagesLoading && messages.map((message, index) => {
+                    console.log(`[ChatContainer rendering Message ${message._id || index}] is_file: ${message.is_file}, Type: ${typeof message.is_file}, Full Message Prop:`, JSON.parse(JSON.stringify(message)));
+                    return (
+                        <Message
+                            key={message._id || `msg-${index}`} // Use index as fallback key
+                            message={message}
+                        />
+                    );
+                })}
 
                 {/* Empty div to scroll to */}
                 <div ref={messageEndRef} />

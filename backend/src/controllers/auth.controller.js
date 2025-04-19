@@ -99,12 +99,13 @@ export const updateProfile = async (req, res) => {
         const uploadResponse = await cloudinary.uploader.upload(profilePic);
         updateData.profilePic = uploadResponse.secure_url;
     }
-    if (publicKey) {
-        updateData.publicKey = publicKey;
-    }
+    // Removed publicKey update from here, handled by updatePublicKey
+    // if (publicKey) {
+    //     updateData.publicKey = publicKey;
+    // }
 
     if (Object.keys(updateData).length === 0) {
-        return res.status(400).json({ message: "No update data provided" });
+        return res.status(400).json({ message: "No update data provided (only profilePic allowed here)" });
     }
 
     const updatedUser = await User.findByIdAndUpdate(
@@ -132,7 +133,7 @@ export const checkAuth = (req, res) => {
   }
 };
 
-// New function to get public key
+// Function to get public key by user ID
 export const getPublicKey = async (req, res) => {
     try {
         const { userId } = req.params;
@@ -150,5 +151,40 @@ export const getPublicKey = async (req, res) => {
     } catch (error) {
         console.log("Error in getPublicKey controller", error.message);
         res.status(500).json({ message: "Internal Server Error" });
+    }
+};
+
+// *** NEW Controller function to update ONLY the public key ***
+export const updatePublicKey = async (req, res) => {
+    try {
+        const { publicKey } = req.body;
+        const userId = req.user._id; // From protectRoute
+
+        if (!publicKey || typeof publicKey !== 'string') {
+            return res.status(400).json({ message: "Public key is required and must be a string." });
+        }
+
+        // Validate PEM format basic check (optional but recommended)
+        if (!publicKey.startsWith('-----BEGIN PUBLIC KEY-----') || !publicKey.endsWith('-----END PUBLIC KEY-----')) {
+             return res.status(400).json({ message: "Invalid public key format." });
+        }
+
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            { publicKey: publicKey },
+            { new: true } // Return the updated document
+        ).select("-password -email -fullName -profilePic"); // Only return _id and potentially success status
+
+        if (!updatedUser) {
+            return res.status(404).json({ message: "User not found while updating public key." });
+        }
+
+        console.log(`Public key updated for user ${userId}`);
+        // Don't need to return the full user, just confirmation
+        res.status(200).json({ message: "Public key updated successfully." });
+
+    } catch (error) {
+        console.error("Error in updatePublicKey controller:", error.message);
+        res.status(500).json({ message: "Internal server error" });
     }
 };

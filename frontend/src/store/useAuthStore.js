@@ -2,33 +2,99 @@ import { create } from "zustand";
 import { axiosInstance } from "../lib/axios.js";
 import toast from "react-hot-toast";
 import { io } from "socket.io-client";
-import { JSEncrypt } from "jsencrypt"; // Import JSEncrypt
+import { JSEncrypt } from "jsencrypt";
+import { useChatStore } from "./useChatStore.js";
 
 const BASE_URL = import.meta.env.MODE === "development" ? "http://localhost:5001" : "/";
 
-// Helper function to generate RSA keys
+// Helper to generate keys
 const generateKeys = () => {
-    const crypt = new JSEncrypt({ default_key_size: 2048 }); // Use 2048-bit keys
+    const crypt = new JSEncrypt({ default_key_size: 2048 });
     const privateKey = crypt.getPrivateKey();
     const publicKey = crypt.getPublicKey();
     console.log("New RSA keys generated.");
     return { privateKey, publicKey };
 };
 
-// // Helper function to update public key on backend (Keep for potential future use if needed)
-// const updatePublicKeyOnServer = async (publicKey) => {
-//     try {
-//         await axiosInstance.put("/auth/update-profile", { publicKey });
-//         console.log("Public key updated on server.");
-//     } catch (error) {
-//         console.error("Error updating public key on server:", error);
-//         toast.error("Failed to sync public key with server.");
-//     }
-// };
+// Helper to securely store keys
+const storeKeys = (privateKey, publicKey, userId) => {
+    try {
+        if (!userId || !privateKey || !publicKey) {
+            console.error("Missing required data for key storage");
+            return false;
+        }
+        
+        const keyPrefix = `chatty_${userId}_`;
+        localStorage.setItem(`${keyPrefix}private_key`, privateKey);
+        localStorage.setItem(`${keyPrefix}public_key`, publicKey);
+        console.log("Keys stored successfully for user:", userId);
+        return true;
+    } catch (error) {
+        console.error("Failed to store keys:", error);
+        return false;
+    }
+};
+
+// Helper to retrieve stored keys
+const retrieveKeys = (userId) => {
+    try {
+        if (!userId) {
+            console.log("No userId provided for key retrieval");
+            return null;
+        }
+
+        const keyPrefix = `chatty_${userId}_`;
+        const privateKey = localStorage.getItem(`${keyPrefix}private_key`);
+        const publicKey = localStorage.getItem(`${keyPrefix}public_key`);
+        
+        if (!privateKey || !publicKey) {
+            console.log("No stored keys found for user:", userId);
+            return null;
+        }
+        
+        console.log("Retrieved stored keys for user:", userId);
+        return { privateKey, publicKey };
+    } catch (error) {
+        console.error("Failed to retrieve keys:", error);
+        return null;
+    }
+};
+
+// Helper to clear stored keys
+const clearStoredKeys = (userId) => {
+    try {
+        if (!userId) return;
+        const keyPrefix = `chatty_${userId}_`;
+        localStorage.removeItem(`${keyPrefix}private_key`);
+        localStorage.removeItem(`${keyPrefix}public_key`);
+        console.log("Cleared stored keys for user:", userId);
+    } catch (error) {
+        console.error("Failed to clear keys:", error);
+    }
+};
+
+// Helper to validate keys
+const validateKeys = async (privateKey, publicKey) => {
+    try {
+        const testMessage = "test";
+        const encryptor = new JSEncrypt();
+        encryptor.setPublicKey(publicKey);
+        const encrypted = encryptor.encrypt(testMessage);
+        
+        const decryptor = new JSEncrypt();
+        decryptor.setPrivateKey(privateKey);
+        const decrypted = decryptor.decrypt(encrypted);
+        
+        return decrypted === testMessage;
+    } catch (error) {
+        console.error("Key validation failed:", error);
+        return false;
+    }
+};
 
 export const useAuthStore = create((set, get) => ({
     authUser: null,
-    privateKey: null, // Private key state
+    privateKey: null,
     isSigningUp: false,
     isLoggingIn: false,
     isUpdatingProfile: false,
@@ -36,32 +102,51 @@ export const useAuthStore = create((set, get) => ({
     onlineUsers: [],
     socket: null,
 
-    // Function to load keys FROM localStorage only
-    loadKeysFromStorage: () => {
-        const storedPrivateKey = localStorage.getItem("privateKey");
-        // const storedPublicKey = localStorage.getItem("publicKey"); // Optional: Load public key too if needed directly
-
-        if (storedPrivateKey) {
-            set({ privateKey: storedPrivateKey });
-            console.log("Private key loaded from localStorage.");
-        } else {
-            set({ privateKey: null }); // Ensure privateKey is null if not found
-            console.log("Private key not found in localStorage.");
-        }
-        // We don't generate keys here anymore
-    },
-
     checkAuth: async () => {
         set({ isCheckingAuth: true });
         try {
             const res = await axiosInstance.get("/auth/check");
-            set({ authUser: res.data }); // Set user data first
-            get().loadKeysFromStorage(); // Then load keys associated with this device storage
+            const userId = res.data._id;
+            
+            // Try to retrieve stored keys
+            const storedKeys = retrieveKeys(userId);
+            if (storedKeys && await validateKeys(storedKeys.privateKey, storedKeys.publicKey)) {
+                console.log("Retrieved and validated stored keys successfully");
+                
+                // Update server with stored public key to ensure sync
+                await axiosInstance.put("/auth/update-public-key", { 
+                    publicKey: storedKeys.publicKey 
+                });
+                
+                set({ 
+                    authUser: res.data, 
+                    privateKey: storedKeys.privateKey
+                });
+            } else {
+                console.log("No valid stored keys found during checkAuth, generating new ones");
+                const { privateKey, publicKey } = generateKeys();
+                
+                // Update server with new public key
+                await axiosInstance.put("/auth/update-public-key", { publicKey });
+                
+                // Store new keys
+                if (storeKeys(privateKey, publicKey, userId)) {
+                    set({ 
+                        authUser: res.data,
+                        privateKey: privateKey
+                    });
+                } else {
+                    throw new Error("Failed to store newly generated keys");
+                }
+            }
+            
             get().connectSocket();
         } catch (error) {
-            console.log("CheckAuth: User not authenticated or error occurred.");
-            set({ authUser: null, privateKey: null }); // Clear user and key
-            // Don't clear localStorage here, maybe user just needs to log in again
+            console.log("Auth check failed:", error);
+            set({ authUser: null, privateKey: null });
+            if (error.response?.status === 401) {
+                clearStoredKeys(get().authUser?._id);
+            }
         } finally {
             set({ isCheckingAuth: false });
         }
@@ -69,32 +154,25 @@ export const useAuthStore = create((set, get) => ({
 
     signup: async (data) => {
         set({ isSigningUp: true });
-        let generatedPrivateKey = null; // Keep track of the generated private key
         try {
-            // 1. Generate NEW keys for the new user
             const { privateKey, publicKey } = generateKeys();
-            generatedPrivateKey = privateKey; // Store for setting state later
-
-            // 2. Save keys to localStorage for this device
-            localStorage.setItem("privateKey", privateKey);
-            localStorage.setItem("publicKey", publicKey);
-            console.log("New keys saved to localStorage during signup.");
-
-            // 3. Send signup data INCLUDING the new public key
             const res = await axiosInstance.post("/auth/signup", { ...data, publicKey });
-
-            // 4. Set auth state (user data + the generated private key)
-            set({ authUser: res.data, privateKey: generatedPrivateKey });
-            toast.success("Account created successfully");
-            get().connectSocket();
-
+            const userId = res.data._id;
+            
+            if (storeKeys(privateKey, publicKey, userId)) {
+                set({ 
+                    authUser: res.data, 
+                    privateKey: privateKey
+                });
+                toast.success("Account created successfully");
+                get().connectSocket();
+            } else {
+                throw new Error("Failed to store keys after signup");
+            }
         } catch (error) {
-            console.error("Error during signup:", error);
+            console.error("Signup failed:", error);
             toast.error(error.response?.data?.message || "Signup failed");
-            // Clear keys from storage if signup fails to prevent dangling keys
-            localStorage.removeItem("privateKey");
-            localStorage.removeItem("publicKey");
-            set({ privateKey: null }); // Clear private key state
+            set({ authUser: null, privateKey: null });
         } finally {
             set({ isSigningUp: false });
         }
@@ -103,110 +181,128 @@ export const useAuthStore = create((set, get) => ({
     login: async (data) => {
         set({ isLoggingIn: true });
         try {
-            const res = await axiosInstance.post("/auth/login", data);
-            // Set authUser first (contains public key from DB)
-            set({ authUser: res.data });
-            // Attempt to load the private key corresponding to this device/browser
-            get().loadKeysFromStorage();
+            const loginRes = await axiosInstance.post("/auth/login", data);
+            const userId = loginRes.data._id;
+            
+            let privateKey, publicKey;
+            const storedKeys = retrieveKeys(userId);
+            
+            if (storedKeys && await validateKeys(storedKeys.privateKey, storedKeys.publicKey)) {
+                privateKey = storedKeys.privateKey;
+                publicKey = storedKeys.publicKey;
+                console.log("Using existing validated keys");
+            } else {
+                console.log("Generating new keys");
+                const newKeys = generateKeys();
+                privateKey = newKeys.privateKey;
+                publicKey = newKeys.publicKey;
+                
+                if (!storeKeys(privateKey, publicKey, userId)) {
+                    throw new Error("Failed to store new keys");
+                }
+            }
+            
+            // Always update server with current public key
+            await axiosInstance.put("/auth/update-public-key", { publicKey });
+            
+            // Get final user state
+            const checkRes = await axiosInstance.get("/auth/check");
+            
+            set({ 
+                authUser: checkRes.data,
+                privateKey: privateKey
+            });
+            
             toast.success("Logged in successfully");
             get().connectSocket();
         } catch (error) {
-            console.error("Error during login:", error);
+            console.error("Login failed:", error);
             toast.error(error.response?.data?.message || "Login failed");
-            // Don't clear localStorage keys on login failure, user might try again
-            set({ authUser: null, privateKey: null }); // Clear state
+            set({ authUser: null, privateKey: null });
         } finally {
             set({ isLoggingIn: false });
         }
     },
 
     logout: async () => {
+        const userId = get().authUser?._id;
         try {
             await axiosInstance.post("/auth/logout");
+            if (userId) {
+                clearStoredKeys(userId);
+            }
         } catch (error) {
-             // Log error but proceed with client-side cleanup
-             console.error("Error during server logout:", error);
-             toast.error(error.response?.data?.message || "Server logout failed, clearing client state.");
+            console.error("Logout error:", error);
         } finally {
-            // Always perform client-side cleanup
-            get().disconnectSocket(); // Disconnect socket first
-            set({ authUser: null, privateKey: null }); // Clear user and private key state
-            localStorage.removeItem("privateKey"); // Remove private key from storage
-            localStorage.removeItem("publicKey"); // Remove public key from storage
-            console.log("Cleared keys from localStorage on logout.");
+            get().disconnectSocket();
+            set({ authUser: null, privateKey: null, onlineUsers: [] });
             toast.success("Logged out successfully");
         }
     },
 
-    // updateProfile might need adjustment if public key needs changing,
-    // but for now, focus is on fixing the decryption loop.
-    updateProfile: async (data) => {
-        set({ isUpdatingProfile: true });
-        try {
-            // We don't need to load/check keys here unless updating the key itself
-            const res = await axiosInstance.put("/auth/update-profile", data);
-            set({ authUser: res.data });
-            toast.success("Profile updated successfully");
-        } catch (error) {
-            console.log("error in update profile:", error);
-            toast.error(error.response?.data?.message || "Profile update failed");
-        } finally {
-            set({ isUpdatingProfile: false });
-        }
-    },
-
     connectSocket: () => {
-       const { authUser, socket } = get(); // Get current socket state too
-        // Prevent reconnecting if already connected
-        if (!authUser || socket?.connected) {
-            // console.log("Socket connection skipped (no authUser or already connected)");
-            return;
-        }
-
-        console.log(`Attempting to connect socket for user: ${authUser._id}`);
+        const { authUser, socket } = get();
+        if (!authUser || socket?.connected) return;
+        
+        console.log(`[Socket] Connecting for user ${authUser._id}`);
         const newSocket = io(BASE_URL, {
-            query: {
-                userId: authUser._id,
-            },
-            // Optional: Add reconnection attempts, etc.
-            // reconnectionAttempts: 5,
-            // reconnectionDelay: 1000,
+            query: { userId: authUser._id },
+            reconnection: true,         // Cho phép tự động kết nối lại
+            reconnectionAttempts: 10,   // Số lần thử lại
+            reconnectionDelay: 1000,    // Độ trễ giữa các lần thử 
+            timeout: 10000              // Tăng timeout
         });
-
+        
         newSocket.on("connect", () => {
-             console.log("Socket connected:", newSocket.id);
-             set({ socket: newSocket }); // Update state only on successful connect
+            console.log("[Socket] Connected:", newSocket.id);
+            set({ socket: newSocket });
+            // Chủ động yêu cầu danh sách online users
+            newSocket.emit("getOnlineUsers");
+            // Chủ động yêu cầu tin nhắn mới khi kết nối lại
+            const selectedUser = useChatStore.getState().selectedUser;
+            if (selectedUser?._id) {
+                newSocket.emit("getNewMessages", {
+                    userId: selectedUser._id
+                });
+            }
         });
-
+        
+        // Xử lý sự kiện disconnect
         newSocket.on("disconnect", (reason) => {
-            console.log("Socket disconnected:", reason);
-             // Check if disconnect was initiated by client (logout) or server/network issue
-             // No need to clear socket state here if it might reconnect,
-             // but handle potential cleanup if disconnect is permanent.
-             // set({ socket: null }); // Maybe only if reason is 'io client disconnect'
+            console.log("[Socket] Disconnected:", reason);
+            // Không set socket = null khi disconnect tạm thời
+            if (reason === "io server disconnect") {
+                // Server chủ động đóng kết nối, thử kết nối lại
+                newSocket.connect();
+            }
         });
-
-        newSocket.on("connect_error", (error) => {
-            console.error("Socket connection error:", error);
+        
+        // Xử lý lỗi kết nối
+        newSocket.on("connect_error", (error) => { 
+            console.error("[Socket] Connection error:", error.message);
             toast.error(`Socket connection failed: ${error.message}`);
-            // Don't set socket to null immediately, io attempts reconnection by default
         });
-
-
+        
+        // Thêm event listener cho reconnect
+        newSocket.on("reconnect", (attemptNumber) => {
+            console.log("[Socket] Reconnected after", attemptNumber, "attempts");
+            // Yêu cầu danh sách online users sau khi reconnect
+            newSocket.emit("getOnlineUsers");
+        });
+        
+        // Cập nhật danh sách người dùng online
         newSocket.on("getOnlineUsers", (userIds) => {
+            console.log("[Socket] Received online users:", userIds);
             set({ onlineUsers: userIds });
         });
-
-        // No need to call connect() explicitly, io() initiates connection
-
     },
+
     disconnectSocket: () => {
         const currentSocket = get().socket;
-        if (currentSocket?.connected) {
-            console.log("Disconnecting socket explicitly.");
+        if (currentSocket) {
+            console.log("[Socket] Disconnecting socket explicitly.");
             currentSocket.disconnect();
+            set({ socket: null, onlineUsers: [] });
         }
-         // Always clear socket state and online users on explicit disconnect
-        set({ socket: null, onlineUsers: [] });
     },
 }));
