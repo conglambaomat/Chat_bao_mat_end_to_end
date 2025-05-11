@@ -2,12 +2,12 @@ import { useEffect, useState, useMemo, useCallback } from 'react'; // Import use
 import { useAuthStore } from '../store/useAuthStore';
 import { useChatStore } from '../store/useChatStore';
 import { arrayBufferToBase64, base64ToArrayBuffer, formatMessageTime } from '../lib/utils';
-import JSEncrypt from 'jsencrypt'; // Import JSEncrypt library
+import JSEncrypt from 'jsencrypt'; 
 import toast from 'react-hot-toast';
-import { Loader, Download, FileText, FileWarning } from 'lucide-react';
-import DecryptedMessageContent from './DecryptedMessageContent'; // Import the new component
+import { Loader, Download, FileText, FileWarning, Trash2 } from 'lucide-react';
+import DecryptedMessageContent from './DecryptedMessageContent'; 
 
-// Helper to format file size
+
 const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -17,21 +17,57 @@ const formatFileSize = (bytes) => {
 };
 
 const Message = ({ message }) => {
-    // Use individual selectors
+   
     const authUser = useAuthStore((state) => state.authUser);
     const privateKey = useAuthStore((state) => state.privateKey);
     const selectedUser = useChatStore((state) => state.selectedUser);
-    const [isDownloading, setIsDownloading] = useState(false); // State for download loading
+   
+    const selectedMessageId = useChatStore((state) => state.selectedMessageId);
+    const setSelectedMessageId = useChatStore((state) => state.setSelectedMessageId);
+    const deleteMessage = useChatStore((state) => state.deleteMessage);
 
-    const isSender = message.senderId === authUser?._id; // Add optional chaining for safety
+    const [isDownloading, setIsDownloading] = useState(false);
+
+    const isSender = message.senderId === authUser?._id; 
     const chatClassName = isSender ? "chat-end" : "chat-start";
     const bubbleBgColor = isSender ? "bg-sky-500" : "bg-gray-600";
-    // Ensure selectedUser exists before accessing profilePic
+
     const profilePic = isSender ? authUser?.profilePic : selectedUser?.profilePic;
     const formattedTime = formatMessageTime(message.createdAt);
 
-    // Download and decrypt file handler
+  
+    const isSelected = selectedMessageId === message._id;
+
+   
+    console.log(`[Message ${message._id}] Render. isSender: ${isSender}, selectedMessageId: ${selectedMessageId}, isSelected: ${isSelected}`);
+
+  
+    const handleMessageClick = useCallback(() => {
+     
+        console.log(`[Message ${message._id}] handleMessageClick fired. isSender: ${isSender}`);
+        if (isSender) {
+            setSelectedMessageId(message._id);
+        } else {
+           
+            setSelectedMessageId(null);
+           
+            console.log(`[Message ${message._id}] Clicked received message, clearing selection.`);
+        }
+    }, [message._id, isSender, setSelectedMessageId]);
+
+    
+    const handleDeleteClick = useCallback((e) => {
+        e.stopPropagation();
+       
+        console.log(`[Message ${message._id}] handleDeleteClick fired.`);
+        if (window.confirm("Are you sure you want to delete this message?")) {
+            deleteMessage(message._id);
+        }
+    }, [message._id, deleteMessage]);
+
+  
     const handleDownloadFile = useCallback(async () => {
+        setSelectedMessageId(null);
         if (!message.is_file || !privateKey) {
             toast.error("Cannot download file: Information missing or no private key.");
             return;
@@ -43,7 +79,7 @@ const Message = ({ message }) => {
         let decryptedAesKeyBase64 = null;
         let fileAesKey = null;
         try {
-            // 1. Determine which encrypted AES key to use
+          
             console.log(`[handleDownloadFile] Checking keys for message ${message._id}:`);
             console.log(`  -> isSender: ${isSender} (authUser: ${authUser?._id}, msgSender: ${message.senderId})`);
             console.log(`  -> message.file_encrypted_key (for receiver):`, message.file_encrypted_key ? message.file_encrypted_key.substring(0,30)+'...' : 'MISSING/NULL');
@@ -56,7 +92,7 @@ const Message = ({ message }) => {
                 throw new Error("Missing encrypted AES key for the file.");
             }
 
-            // 2. Decrypt the AES key for the file
+          
             const decryptor = new JSEncrypt();
             decryptor.setPrivateKey(privateKey);
             decryptedAesKeyBase64 = decryptor.decrypt(encryptedAesKeyBase64);
@@ -74,7 +110,7 @@ const Message = ({ message }) => {
             console.log("[handleDownloadFile] Imported fileAesKey object:", fileAesKey);
             console.log("[handleDownloadFile] Decrypted AES Key (Base64 for import):", decryptedAesKeyBase64);
 
-            // 3. Get the file's IV
+            
             if (!message.file_iv) {
                 throw new Error("Missing file IV in message data.");
             }
@@ -83,13 +119,13 @@ const Message = ({ message }) => {
             const fileIv = base64ToArrayBuffer(message.file_iv);
             console.log("[handleDownloadFile] File IV ArrayBuffer length:", fileIv.byteLength);
 
-            // 4. Fetch the encrypted file content
+            
             toast.loading("Downloading encrypted file...", { id: loadingToastId });
             const response = await fetch(`/api/files/download/${message.file_path}`, {
-                credentials: 'include' // Ensure cookies are sent for authentication
+                credentials: 'include'
             });
 
-            // Check response type and status
+           
             const contentType = response.headers.get('content-type');
             console.log("[handleDownloadFile] Response headers:", {
                 status: response.status,
@@ -108,7 +144,7 @@ const Message = ({ message }) => {
                 throw new Error(`Server returned error: ${response.status} ${response.statusText}`);
             }
 
-            // Check content type, but be more lenient
+            
             if (!contentType) {
                 console.warn("[handleDownloadFile] Missing content-type header");
             } else if (!contentType.includes('application/octet-stream')) {
@@ -118,19 +154,19 @@ const Message = ({ message }) => {
             const encryptedFileBuffer = await response.arrayBuffer();
             console.log("[handleDownloadFile] Encrypted file buffer size:", encryptedFileBuffer.byteLength);
 
-            // Log first/last bytes of downloaded buffer BEFORE decryption
+            
             const downloadedBytes = new Uint8Array(encryptedFileBuffer);
             console.log(`[handleDownloadFile] Downloaded Buffer (${downloadedBytes.length} bytes) Start:`, downloadedBytes.slice(0, 16));
             console.log(`[handleDownloadFile] Downloaded Buffer End:`, downloadedBytes.slice(-16));
 
-            // Check if the buffer looks like HTML (simple heuristic)
+       
             const firstBytesStr = String.fromCharCode.apply(null, downloadedBytes.slice(0, 20));
             if (firstBytesStr.includes('<!DOCTYPE') || firstBytesStr.includes('<html')) {
                 console.error('[handleDownloadFile] Received HTML instead of binary data:', firstBytesStr);
                 throw new Error('Server returned HTML instead of file data. Please check server logs.');
             }
 
-            // 5. Decrypt the file content
+
             toast.loading("Decrypting file...", { id: loadingToastId });
             console.log("[handleDownloadFile] Attempting crypto.subtle.decrypt...");
             const decryptedFileBuffer = await crypto.subtle.decrypt(
@@ -139,7 +175,7 @@ const Message = ({ message }) => {
                 encryptedFileBuffer
             );
 
-            // 6. Create Blob and trigger download
+          
             const blob = new Blob([decryptedFileBuffer], { type: message.file_type || 'application/octet-stream' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -170,11 +206,29 @@ const Message = ({ message }) => {
             console.error("--- End Error Details ---");
         } finally {
             setIsDownloading(false);
+            setSelectedMessageId(null);
         }
-    }, [message, privateKey, isSender]);
+    }, [message, privateKey, isSender, setSelectedMessageId]);
 
     return (
-        <div className={`chat ${chatClassName}`}>
+        <div
+            className={`chat ${chatClassName} relative group ${isSender ? 'cursor-pointer' : ''}`}
+            onClick={handleMessageClick}
+        >
+            {/* Delete Button - Show only for sender's messages when selected + hovered */}
+            {isSender && isSelected && (
+                <button
+                    onClick={handleDeleteClick} 
+                   
+                    className={`absolute ${isSender ? 'right-[calc(2.5rem+0.5rem)]' : 'left-[calc(2.5rem+0.5rem)]'} top-1/2 transform -translate-y-1/2
+                               p-1.5 rounded-full bg-red-500 hover:bg-red-600 text-white
+                               opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10`}
+                    title="Delete Message"
+                >
+                    <Trash2 size={18} />
+                </button>
+            )}
+
             <div className="chat-image avatar">
                 <div className="w-10 rounded-full">
                     <img alt="User avatar" src={profilePic || "/avatar.png"} />
@@ -183,12 +237,14 @@ const Message = ({ message }) => {
             <div className={`chat-bubble ${bubbleBgColor} text-white pb-2 px-3 break-words`}>
                 {/* --- Prioritize File Message Rendering --- */}
                 {message.is_file === true ? (
-                    <div className="flex items-center gap-3 p-2 cursor-pointer" onClick={!isDownloading ? handleDownloadFile : undefined}>
-                        {isDownloading ? (
-                            <Loader className="size-6 animate-spin flex-shrink-0" />
-                        ) : (
-                            <Download className="size-6 text-sky-300 hover:text-sky-100 flex-shrink-0" />
-                        )}
+                    <div className="flex items-center gap-3 p-2">
+                        <button onClick={!isDownloading ? handleDownloadFile : undefined} disabled={isDownloading} className="flex-shrink-0 p-1 rounded hover:bg-black/20">
+                            {isDownloading ? (
+                                <Loader className="size-6 animate-spin" />
+                            ) : (
+                                <Download className="size-6 text-sky-300" />
+                            )}
+                        </button>
                         <div className="flex flex-col overflow-hidden">
                             <span className="text-sm font-medium truncate" title={message.original_file_name}>
                                 {message.original_file_name || "Attached File"}
@@ -199,7 +255,7 @@ const Message = ({ message }) => {
                         </div>
                     </div>
                 ) : (
-                    /* --- Rendering for Non-File Messages --- */
+                   
                     <DecryptedMessageContent
                         message={message}
                         privateKey={privateKey}

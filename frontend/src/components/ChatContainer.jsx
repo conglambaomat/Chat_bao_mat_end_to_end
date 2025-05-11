@@ -5,32 +5,32 @@ import { useEffect, useRef, useCallback } from "react";
 import ChatHeader from "./ChatHeader";
 import MessageInput from "./MessageInput";
 import MessageSkeleton from "./skeletons/MessageSkeleton";
-import Message from "./Message"; // Import the new Message component
+import Message from "./Message"; 
 
 const ChatContainer = () => {
-    // Select state slices individually for better performance and stability
+   
     const messages = useChatStore((state) => state.messages);
     const isMessagesLoading = useChatStore((state) => state.isMessagesLoading);
     const selectedUser = useChatStore((state) => state.selectedUser);
     const setupMessageListeners = useChatStore((state) => state.setupMessageListeners);
     const hasNewMessages = useChatStore((state) => state.hasNewMessages);
     
-    // Socket from auth store
+   
     const socket = useAuthStore((state) => state.socket);
 
     const messageEndRef = useRef(null);
     const containerRef = useRef(null);
 
-    // Khởi tạo socket listeners khi component mount hoặc socket thay đổi
+   
     useEffect(() => {
         if (socket) {
             setupMessageListeners();
         }
     }, [socket, setupMessageListeners]);
 
-    // Cuộn xuống tin nhắn mới
+   
     useEffect(() => {
-        // Scroll to bottom whenever messages change or new messages arrive
+        
         const timer = setTimeout(() => {
             if (messageEndRef.current) {
                 messageEndRef.current.scrollIntoView({ behavior: hasNewMessages ? "smooth" : "auto" });

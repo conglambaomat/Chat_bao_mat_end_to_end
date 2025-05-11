@@ -7,7 +7,7 @@ import { useChatStore } from "./useChatStore.js";
 
 const BASE_URL = import.meta.env.MODE === "development" ? "http://localhost:5001" : "/";
 
-// Helper to generate keys
+
 const generateKeys = () => {
     const crypt = new JSEncrypt({ default_key_size: 2048 });
     const privateKey = crypt.getPrivateKey();
@@ -16,7 +16,7 @@ const generateKeys = () => {
     return { privateKey, publicKey };
 };
 
-// Helper to securely store keys
+
 const storeKeys = (privateKey, publicKey, userId) => {
     try {
         if (!userId || !privateKey || !publicKey) {
@@ -35,7 +35,7 @@ const storeKeys = (privateKey, publicKey, userId) => {
     }
 };
 
-// Helper to retrieve stored keys
+
 const retrieveKeys = (userId) => {
     try {
         if (!userId) {
@@ -60,7 +60,7 @@ const retrieveKeys = (userId) => {
     }
 };
 
-// Helper to clear stored keys
+
 const clearStoredKeys = (userId) => {
     try {
         if (!userId) return;
@@ -73,7 +73,7 @@ const clearStoredKeys = (userId) => {
     }
 };
 
-// Helper to validate keys
+
 const validateKeys = async (privateKey, publicKey) => {
     try {
         const testMessage = "test";
@@ -108,12 +108,12 @@ export const useAuthStore = create((set, get) => ({
             const res = await axiosInstance.get("/auth/check");
             const userId = res.data._id;
             
-            // Try to retrieve stored keys
+         
             const storedKeys = retrieveKeys(userId);
             if (storedKeys && await validateKeys(storedKeys.privateKey, storedKeys.publicKey)) {
                 console.log("Retrieved and validated stored keys successfully");
                 
-                // Update server with stored public key to ensure sync
+         
                 await axiosInstance.put("/auth/update-public-key", { 
                     publicKey: storedKeys.publicKey 
                 });
@@ -123,13 +123,14 @@ export const useAuthStore = create((set, get) => ({
                     privateKey: storedKeys.privateKey
                 });
             } else {
+                console.warn("[checkAuth] Keys not found or failed validation. Generating new keys.");
                 console.log("No valid stored keys found during checkAuth, generating new ones");
                 const { privateKey, publicKey } = generateKeys();
                 
-                // Update server with new public key
+               
                 await axiosInstance.put("/auth/update-public-key", { publicKey });
                 
-                // Store new keys
+             
                 if (storeKeys(privateKey, publicKey, userId)) {
                     set({ 
                         authUser: res.data,
@@ -192,6 +193,7 @@ export const useAuthStore = create((set, get) => ({
                 publicKey = storedKeys.publicKey;
                 console.log("Using existing validated keys");
             } else {
+                console.warn("[login] Keys not found or failed validation. Generating new keys.");
                 console.log("Generating new keys");
                 const newKeys = generateKeys();
                 privateKey = newKeys.privateKey;
@@ -202,10 +204,10 @@ export const useAuthStore = create((set, get) => ({
                 }
             }
             
-            // Always update server with current public key
+         
             await axiosInstance.put("/auth/update-public-key", { publicKey });
             
-            // Get final user state
+       
             const checkRes = await axiosInstance.get("/auth/check");
             
             set({ 
@@ -228,15 +230,35 @@ export const useAuthStore = create((set, get) => ({
         const userId = get().authUser?._id;
         try {
             await axiosInstance.post("/auth/logout");
-            if (userId) {
-                clearStoredKeys(userId);
-            }
+         
         } catch (error) {
             console.error("Logout error:", error);
         } finally {
             get().disconnectSocket();
             set({ authUser: null, privateKey: null, onlineUsers: [] });
             toast.success("Logged out successfully");
+        }
+    },
+
+    updateProfile: async (data) => {
+        const { authUser } = get();
+        if (!authUser) return toast.error("User not authenticated");
+        
+        set({ isUpdatingProfile: true });
+        const toastId = toast.loading("Updating profile...");
+        
+        try {
+           
+            const res = await axiosInstance.put(`/auth/update-profile`, data);
+            
+            set({ authUser: res.data });
+            toast.success("Profile updated successfully", { id: toastId });
+            
+        } catch (error) {
+            console.error("Profile update failed:", error);
+            toast.error(error.response?.data?.message || "Profile update failed", { id: toastId });
+        } finally {
+            set({ isUpdatingProfile: false });
         }
     },
 
@@ -247,18 +269,18 @@ export const useAuthStore = create((set, get) => ({
         console.log(`[Socket] Connecting for user ${authUser._id}`);
         const newSocket = io(BASE_URL, {
             query: { userId: authUser._id },
-            reconnection: true,         // Cho phép tự động kết nối lại
-            reconnectionAttempts: 10,   // Số lần thử lại
-            reconnectionDelay: 1000,    // Độ trễ giữa các lần thử 
-            timeout: 10000              // Tăng timeout
+            reconnection: true,        
+            reconnectionAttempts: 10,   
+            reconnectionDelay: 1000,   
+            timeout: 10000              
         });
         
         newSocket.on("connect", () => {
             console.log("[Socket] Connected:", newSocket.id);
             set({ socket: newSocket });
-            // Chủ động yêu cầu danh sách online users
+         
             newSocket.emit("getOnlineUsers");
-            // Chủ động yêu cầu tin nhắn mới khi kết nối lại
+            
             const selectedUser = useChatStore.getState().selectedUser;
             if (selectedUser?._id) {
                 newSocket.emit("getNewMessages", {
@@ -267,30 +289,30 @@ export const useAuthStore = create((set, get) => ({
             }
         });
         
-        // Xử lý sự kiện disconnect
+  
         newSocket.on("disconnect", (reason) => {
             console.log("[Socket] Disconnected:", reason);
-            // Không set socket = null khi disconnect tạm thời
+            
             if (reason === "io server disconnect") {
-                // Server chủ động đóng kết nối, thử kết nối lại
+                
                 newSocket.connect();
             }
         });
         
-        // Xử lý lỗi kết nối
+     
         newSocket.on("connect_error", (error) => { 
             console.error("[Socket] Connection error:", error.message);
             toast.error(`Socket connection failed: ${error.message}`);
         });
         
-        // Thêm event listener cho reconnect
+   
         newSocket.on("reconnect", (attemptNumber) => {
             console.log("[Socket] Reconnected after", attemptNumber, "attempts");
-            // Yêu cầu danh sách online users sau khi reconnect
+            
             newSocket.emit("getOnlineUsers");
         });
         
-        // Cập nhật danh sách người dùng online
+       
         newSocket.on("getOnlineUsers", (userIds) => {
             console.log("[Socket] Received online users:", userIds);
             set({ onlineUsers: userIds });

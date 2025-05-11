@@ -9,11 +9,11 @@ router.post("/login", login);
 router.post("/logout", logout);
 
 router.put("/update-profile", protectRoute, updateProfile);
-router.put("/update-public-key", protectRoute, updatePublicKey); // Add route for updating public key
+router.put("/update-public-key", protectRoute, updatePublicKey); 
 
 router.get("/check", protectRoute, checkAuth);
 
-// Add route to get public key by user ID
+
 router.get("/public-key/:userId", protectRoute, getPublicKey);
 
 export default router;

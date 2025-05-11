@@ -3,7 +3,7 @@ import toast from "react-hot-toast";
 import { axiosInstance } from "../lib/axios";
 import { useAuthStore } from "./useAuthStore";
 
-// Helper function to get public key
+
 const fetchPublicKey = async (userId) => {
     try {
         const res = await axiosInstance.get(`/auth/public-key/${userId}`);
@@ -18,38 +18,38 @@ const fetchPublicKey = async (userId) => {
 export const useChatStore = create((set, get) => ({
     messages: [],
     users: [],
-    selectedUser: null, // Will now include publicKey
+    selectedUser: null, 
     isUsersLoading: false,
     isMessagesLoading: false,
-    isSendingMessage: false, // Add loading state for sending
+    isSendingMessage: false,
     isFetchingMessages: false,
     hasNewMessages: false,
 
     getUsers: async () => {
         set({ isUsersLoading: true });
         try {
-            // Backend getUsersForSidebar now includes publicKey
+           
             const res = await axiosInstance.get("/messages/users");
-            // Initialize unreadCount for each user
+           
             const usersWithUnread = res.data.map(user => ({ ...user, unreadCount: 0 }));
-            set({ users: usersWithUnread, isUsersLoading: false }); // Combine users and loading state update
+            set({ users: usersWithUnread, isUsersLoading: false });
         } catch (error) {
             console.error("Error fetching users:", error);
             toast.error(error.response?.data?.message || "Failed to fetch users");
-            set({ isUsersLoading: false }); // Ensure loading is reset on error
+            set({ isUsersLoading: false }); 
         }
     },
 
     getMessages: async (userId) => {
-        set({ isMessagesLoading: true, messages: [] }); // Set loading true, clear messages
+        set({ isMessagesLoading: true, messages: [] }); 
         try {
             const res = await axiosInstance.get(`/messages/${userId}`);
-            // Store encrypted messages directly. Decryption happens in the component.
-            set({ messages: res.data, isMessagesLoading: false }); // Update messages and set loading false
+          
+            set({ messages: res.data, isMessagesLoading: false }); 
         } catch (error) {
             console.error("Error fetching messages:", error);
             toast.error(error.response?.data?.message || "Failed to fetch messages");
-            set({ messages: [], isMessagesLoading: false }); // Clear messages and set loading false on error
+            set({ messages: [], isMessagesLoading: false }); 
         }
     },
 
@@ -70,7 +70,7 @@ export const useChatStore = create((set, get) => ({
         
         set({ isFetchingMessages: true });
         try {
-            // Lấy ID tin nhắn mới nhất đã có (nếu có)
+           
             const lastMessageId = state.messages.length > 0 
                 ? state.messages[state.messages.length - 1]._id 
                 : null;
@@ -79,7 +79,7 @@ export const useChatStore = create((set, get) => ({
                 params: { after: lastMessageId }
             });
             
-            // Thêm tin nhắn mới vào state
+            
             const newMessages = res.data;
             if (newMessages.length > 0) {
                 console.log(`[Chat] Fetched ${newMessages.length} new messages`);
@@ -97,41 +97,30 @@ export const useChatStore = create((set, get) => ({
 
     sendMessage: async (encryptedBundle) => {
         set({ isSendingMessage: true });
-        const { selectedUser } = get();
+        const { selectedUser } = get(); 
         if (!selectedUser) {
             set({ isSendingMessage: false });
             return toast.error("No user selected");
         }
 
         try {
-            // Log the bundle being sent
             console.log("useChatStore sendMessage: Sending bundle:", JSON.stringify(encryptedBundle).substring(0, 200) + "...");
-
-            // Make the POST request - Capture the response
             const response = await axiosInstance.post(`/messages/send/${selectedUser._id}`, encryptedBundle);
-
-            // Log the successful response from the API
             console.log("useChatStore sendMessage: Received successful response (201):", response.data);
 
-            // Important: Even though socket might update, we still need the response
-            // to know the POST itself succeeded. The socket handles real-time UI update.
-
             set({ isSendingMessage: false });
-            // Return the successful message data (optional, but good practice)
             return response.data;
 
         } catch (error) {
             console.error("useChatStore sendMessage: Error sending message:", error);
-            // Log the detailed error response if available
             if (error.response) {
                 console.error("useChatStore sendMessage: Error response data:", error.response.data);
                 console.error("useChatStore sendMessage: Error response status:", error.response.status);
             }
             const errorMsg = error.response?.data?.error || error.message || "Failed to send message";
-            toast.error(`Send Error: ${errorMsg}`); // Make toast more specific
-            set({ isSendingMessage: false }); // Ensure sending is reset on error
-            // Rethrow or return error indicator if needed by caller
-            throw error; // Rethrow to be caught by handleSendMessage if necessary
+            toast.error(`Send Error: ${errorMsg}`);
+            set({ isSendingMessage: false });
+            throw error;
         }
     },
 
@@ -142,7 +131,8 @@ export const useChatStore = create((set, get) => ({
             return;
         }
 
-        socket.off("newMessage"); // Ensure only one listener is active
+
+        socket.off("newMessage"); 
         socket.on("newMessage", (newMessage) => {
             console.log('[SOCKET] Full newMessage received:', JSON.stringify(newMessage, null, 2)); // Log the entire received object
             const state = get();
@@ -157,28 +147,27 @@ export const useChatStore = create((set, get) => ({
             const senderId = newMessage.senderId;
             const receiverId = newMessage.receiverId;
 
-            // Check if the message is relevant to the current user at all
+           
             const isRelevantToAuthUser = senderId === currentAuthUser._id || receiverId === currentAuthUser._id;
             if (!isRelevantToAuthUser) {
                 console.log("[SOCKET] Message not relevant to current user.");
                 return;
             }
 
-            // Determine if the chat with the other participant is currently open
+            
             const isChatOpen = 
                 (senderId === selectedUser?._id && receiverId === currentAuthUser._id) ||
                 (receiverId === selectedUser?._id && senderId === currentAuthUser._id);
 
             if (isChatOpen) {
-                // Chat is open: Add message to the list if not duplicate
+               
                 const messageExists = state.messages.some(msg => msg._id === newMessage._id);
                 if (!messageExists) {
                     console.log("[SOCKET] Adding new message to OPEN chat state:", newMessage._id);
                     console.log("[SOCKET] Message data being added:", JSON.parse(JSON.stringify(newMessage)));
                     set((prevState) => ({ messages: [...prevState.messages, newMessage] }));
                     
-                    // Automatically mark as read since chat is open
-                    // Only mark read if received from the selected user
+                    
                     if (senderId === selectedUser?._id) {
                          axiosInstance.post(`/messages/read/${selectedUser._id}`).catch(err => {
                             console.error("[SOCKET] Failed to auto-mark message as read:", err);
@@ -188,16 +177,15 @@ export const useChatStore = create((set, get) => ({
                      console.log("[SOCKET] Skipping duplicate message in OPEN chat:", newMessage._id);
                 }
             } else {
-                // Chat is NOT open: Show notification and update user list
-                // Only notify if the message was sent TO the current user
+               
                 if (receiverId === currentAuthUser._id) {
                      console.log("[SOCKET] Received message for a CLOSED chat from sender:", senderId);
                     
-                    // Find sender in the user list to show name and update indicator
+                  
                     const senderUser = state.users.find(user => user._id === senderId);
                     if (senderUser) {
                         toast(`New message from ${senderUser.fullName}`);
-                        // Update the specific user in the list to increment unread count
+                       
                         set((prevState) => ({
                             users: prevState.users.map(user => 
                                 user._id === senderId 
@@ -206,33 +194,85 @@ export const useChatStore = create((set, get) => ({
                             )
                         }));
                     } else {
-                         // Fallback if sender not in list (should ideally not happen)
+                        
                          toast("New message received");
                          console.warn(`[SOCKET] Sender user ${senderId} not found in the user list for notification.`);
                     }
-                    // We don't add the message to the `messages` state here,
-                    // it will be fetched when the user selects the chat.
+                    
                 }
             }
         });
         console.log("[subscribeToMessages] 'newMessage' listener is set up.");
+
+       
+        socket.off("messageDeleted"); 
+        socket.on("messageDeleted", (data) => { 
+            console.log(`[SOCKET] Received 'messageDeleted' event. Data:`, data);
+            
+            
+            if (!data || !data.messageId) { 
+                console.warn("[SOCKET messageDeleted] Received invalid data format (missing data or messageId).");
+                return; 
+            }
+
+           
+            const { messageId, conversationId } = data; 
+            const state = get();
+            const authUser = useAuthStore.getState().authUser;
+            const currentSelectedUserId = state.selectedUser?._id;
+
+            console.log(`[SOCKET messageDeleted] State Check: authUser=${authUser?._id}, selectedUser=${currentSelectedUserId}, received conversationId=${conversationId}`);
+
+           
+            const isChatRelevant = true; 
+                                        
+
+            console.log(`[SOCKET messageDeleted] Condition Check: isChatRelevant=${isChatRelevant}`);
+
+            if (isChatRelevant) {
+                console.log(`[SOCKET messageDeleted] Removing deleted message ${messageId} from state.`);
+                set((prevState) => {
+                    const messagesBefore = prevState.messages.length;
+                    const messageExists = prevState.messages.some(msg => msg._id === messageId);
+                    
+                    
+                    if (!messageExists) {
+                        console.log(`[SOCKET messageDeleted] Message ${messageId} not found in current state. Skipping removal.`);
+                        return {}; 
+                    }
+                    
+                    const newMessages = prevState.messages.filter((msg) => msg._id !== messageId);
+                    const messagesAfter = newMessages.length;
+                    console.log(`[SOCKET messageDeleted] Messages before: ${messagesBefore}, after: ${messagesAfter}. Filtered for ID: ${messageId}`);
+                    
+                    return {
+                        messages: newMessages,
+                        selectedMessageId: prevState.selectedMessageId === messageId ? null : prevState.selectedMessageId,
+                    };
+                });
+            } 
+           
+        });
+        console.log("[subscribeToMessages] 'messageDeleted' listener is set up.");
+
     },
 
     unsubscribeFromMessages: () => {
         const socket = useAuthStore.getState().socket;
         if (socket) {
             socket.off("newMessage");
+            socket.off("messageDeleted"); 
         }
     },
 
-    // REVISED setSelectedUser to minimize state updates and add logging
+   
     setSelectedUser: (user) => {
-        // Unsubscribe from previous user's messages if any
+        
         get().unsubscribeFromMessages(); 
         
         const currentUserId = user?._id;
         
-        // Reset the unread count for the newly selected user
+        
         if (currentUserId) {
             set((prevState) => ({ 
                 users: prevState.users.map(u => 
@@ -241,24 +281,22 @@ export const useChatStore = create((set, get) => ({
             }));
         }
         
-        set({ selectedUser: user, messages: [], isLoadingMessages: true }); // Clear messages and set loading
+        set({ selectedUser: user, messages: [], isLoadingMessages: true }); 
         if (currentUserId) {
             get().fetchMessages(currentUserId);
-            get().subscribeToMessages(); // Subscribe to messages for the new user
+            get().subscribeToMessages(); 
             
-            // Mark messages as read for this conversation
+            
             axiosInstance.post(`/messages/read/${currentUserId}`).catch(err => {
                 console.error("Failed to mark messages as read on user selection:", err);
             });
         } else {
-            // If no user is selected (e.g., deselected), clear messages and loading state
+           
             set({ isLoadingMessages: false });
         }
     },
 
-    // This function seems redundant now as its primary purpose (newMessage listener)
-    // is handled by subscribeToMessages. We remove the newMessage handler from here.
-    // If other listeners were intended here, they should be reviewed.
+    
     setupMessageListeners: () => {
         const socket = useAuthStore.getState().socket;
         if (!socket) {
@@ -266,16 +304,13 @@ export const useChatStore = create((set, get) => ({
             return;
         }
         
-        // Ensure other listeners (like receiveNewMessages) are correctly handled
-        // and potentially moved to a more appropriate place (like initial socket connection)
-        // if they are meant to be persistent.
-        socket.off("receiveNewMessages"); // Ensure no duplicates if this runs multiple times
+       
+        socket.off("receiveNewMessages"); 
         socket.on("receiveNewMessages", (messages) => {
             console.log("[SOCKET] Received receiveNewMessages event:", messages);
             if (messages.length > 0) {
                 const state = get();
-                // Filter messages relevant to the *currently selected* chat 
-                // AND prevent duplicates
+                
                 const filteredMessages = messages.filter(msg => {
                     const isRelevant = state.selectedUser?._id && 
                                        (msg.senderId === state.selectedUser._id || msg.receiverId === state.selectedUser._id);
@@ -294,5 +329,46 @@ export const useChatStore = create((set, get) => ({
             }
         });
         console.log("[setupMessageListeners] Listeners (excluding newMessage) are set up.")
+    },
+
+    
+    setSelectedMessageId: (messageId) => {
+        console.log(`[ChatStore] setSelectedMessageId called with: ${messageId}`);
+        set((state) => {
+            const newSelectedId = state.selectedMessageId === messageId ? null : messageId;
+            console.log(`[ChatStore] Updating selectedMessageId from ${state.selectedMessageId} to ${newSelectedId}`);
+            return {
+                selectedMessageId: newSelectedId,
+            };
+        });
+    },
+
+   
+    clearSelectedMessageId: () => {
+        console.log("[ChatStore] clearSelectedMessageId called.");
+        set({ selectedMessageId: null });
+    },
+
+    deleteMessage: async (messageId) => {
+        console.log(`[ChatStore] Attempting to delete message: ${messageId}`);
+        
+        set((state) => ({
+            messages: state.messages.filter((msg) => msg._id !== messageId),
+            selectedMessageId: null, 
+        }));
+
+        try {
+            const response = await axiosInstance.delete(`/messages/delete/${messageId}`);
+            console.log(`[ChatStore] Successfully deleted message ${messageId} on server.`);
+           
+        } catch (error) {
+            console.error(`[ChatStore] Error calling delete API for message ${messageId}:`, error);
+            if (error.response) {
+                console.error("[ChatStore] Delete Error Response Status:", error.response.status);
+                console.error("[ChatStore] Delete Error Response Data:", error.response.data);
+            }
+            alert("Failed to delete message on the server. Message remains deleted locally."); 
+            set({ selectedMessageId: null }); 
+        }
     },
 }));

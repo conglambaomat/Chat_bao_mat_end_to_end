@@ -3,9 +3,9 @@ import { JSEncrypt } from 'jsencrypt';
 import { Loader, FileWarning } from 'lucide-react';
 import { arrayBufferToBase64, base64ToArrayBuffer } from '../lib/utils';
 
-// Moved decryptMessage logic here (or keep it in utils if preferred)
+
 const decryptMessageInternal = async (message, privateKeyPem, isSender) => {
-    // NOTE: No need to check is_file here as this component only receives non-file messages
+   
     if (!privateKeyPem) {
         console.error("[DecryptedContent] Decryption failed: Private key is missing.");
         return { data: null, error: 'Missing private key.', isLoading: false };
@@ -27,15 +27,15 @@ const decryptMessageInternal = async (message, privateKeyPem, isSender) => {
         const aesKeyBuffer = base64ToArrayBuffer(decryptedAesKeyBase64);
         const aesKey = await crypto.subtle.importKey("raw", aesKeyBuffer, { name: "AES-GCM", length: 256 }, true, ["decrypt"]);
 
-        // *** CRITICAL: Check IV before decoding ***
-        if (typeof message.iv !== 'string' || message.iv.length < 5) { // Basic check for valid-looking Base64 IV
+   
+        if (typeof message.iv !== 'string' || message.iv.length < 5) { 
              console.error(`[DecryptedContent ${message._id}] Invalid IV received. Type: ${typeof message.iv}, Value:`, message.iv);
              throw new Error('Invalid IV format received.');
         }
         const ivBuffer = base64ToArrayBuffer(message.iv);
 
-        // *** CRITICAL: Check encryptedContent before decoding ***
-         if (typeof message.encryptedContent !== 'string' || message.encryptedContent.length < 5) { // Basic check
+        
+         if (typeof message.encryptedContent !== 'string' || message.encryptedContent.length < 5) { 
              console.error(`[DecryptedContent ${message._id}] Invalid encryptedContent received. Type: ${typeof message.encryptedContent}, Value:`, message.encryptedContent);
              throw new Error('Invalid encrypted content format received.');
         }
@@ -48,7 +48,7 @@ const decryptMessageInternal = async (message, privateKeyPem, isSender) => {
 
     } catch (error) {
         console.error(`[DecryptedContent ${message._id}] Decryption failed:`, error);
-        // Provide more specific error message if possible
+       
         const errorMessage = error instanceof DOMException && error.message.includes("ciphertext")
                              ? "Decryption failed (likely incorrect key or corrupted data)."
                              : `Decryption failed: ${error.message}`;
@@ -66,7 +66,7 @@ const DecryptedMessageContent = ({ message, privateKey, isSender }) => {
 
     useEffect(() => {
         let isMounted = true;
-        // Reset loading state when message changes
+
         setDecryptionState({ data: null, isLoading: true, error: null });
 
         decryptMessageInternal(message, privateKey, isSender)
@@ -83,14 +83,13 @@ const DecryptedMessageContent = ({ message, privateKey, isSender }) => {
             });
 
         return () => { isMounted = false; };
-    }, [message, privateKey, isSender]); // Depend on props
+    }, [message, privateKey, isSender]); 
 
-    // Determine if decrypted data is an image
+    
     const isImage = useMemo(() => {
         return typeof decryptionState.data === 'string' && decryptionState.data.startsWith('data:image');
     }, [decryptionState.data]);
 
-    // Render logic based on decryption state
     if (decryptionState.isLoading) {
         return <Loader className="size-4 animate-spin my-1" />;
     }
@@ -110,7 +109,7 @@ const DecryptedMessageContent = ({ message, privateKey, isSender }) => {
         return <img src={decryptionState.data} alt="Sent image" className="max-w-xs rounded-md mt-2" />;
     }
 
-    return decryptionState.data; // Render decrypted text
+    return decryptionState.data; 
 };
 
 export default DecryptedMessageContent; 

@@ -20,10 +20,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-    // Add publicKey field to store the user's public RSA key (PEM format)
+   
     publicKey: {
         type: String,
-        default: "", // Or required: true if you enforce key generation on signup
+        default: "", 
     },
   },
   { timestamps: true }

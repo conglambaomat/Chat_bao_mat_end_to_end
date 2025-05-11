@@ -9,22 +9,22 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: ["http://localhost:5173"],
-    credentials: true, // Cho phép gửi cookies qua CORS
+    credentials: true, 
   },
-  pingTimeout: 60000, // Tăng thời gian timeout
+  pingTimeout: 60000, 
 });
 
-// Mapping để lưu trữ người dùng online: {userId: socketId}
+
 const userSocketMap = {};
 
 export function getReceiverSocketId(userId) {
   return userSocketMap[userId];
 }
 
-// Hàm tìm tin nhắn mới cho một cặp người dùng
+
 async function findNewMessagesForUser(userId, authUserId) {
   try {
-    // Tìm các tin nhắn giữa hai người dùng
+   
     const messages = await Message.find({
       $or: [
         { sender: userId, receiver: authUserId },
@@ -45,20 +45,20 @@ io.on("connection", (socket) => {
   const userId = socket.handshake.query.userId;
   
   if (userId) {
-    // Lưu socket ID vào mapping
+   
     userSocketMap[userId] = socket.id;
     console.log(`User ${userId} mapped to socket ${socket.id}`);
     
-    // Gửi danh sách người dùng online
+   
     io.emit("getOnlineUsers", Object.keys(userSocketMap));
   }
 
-  // Xử lý sự kiện yêu cầu danh sách người dùng online
+ 
   socket.on("getOnlineUsers", () => {
     io.to(socket.id).emit("getOnlineUsers", Object.keys(userSocketMap));
   });
   
-  // Xử lý sự kiện yêu cầu tin nhắn mới
+ 
   socket.on("getNewMessages", async ({ userId }) => {
     if (!userId) return;
     
@@ -79,7 +79,7 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("A user disconnected", socket.id);
     
-    // Xác định userId dựa trên socketId
+    
     const disconnectedUserId = Object.keys(userSocketMap).find(
       key => userSocketMap[key] === socket.id
     );

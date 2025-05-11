@@ -1,5 +1,6 @@
 import User from "../models/user.model.js";
 import Message from "../models/message.model.js";
+import Conversation from "../models/conversation.model.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 
 export const getUsersForSidebar = async (req, res) => {
@@ -18,10 +19,10 @@ export const getMessages = async (req, res) => {
     const { id: userToChatId } = req.params;
     const myId = req.user._id;
     
-    // Lấy ID tin nhắn mới nhất đã có (nếu có)
+    
     const { after } = req.query;
     
-    // Tạo query condition
+   
     const query = {
       $or: [
         { senderId: myId, receiverId: userToChatId },
@@ -29,7 +30,7 @@ export const getMessages = async (req, res) => {
       ],
     };
     
-    // Nếu có tham số 'after', chỉ lấy tin nhắn mới hơn ID đó
+    
     if (after) {
       query._id = { $gt: after };
     }
@@ -47,13 +48,13 @@ export const getMessages = async (req, res) => {
   }
 };
 
-// Thêm API endpoint đánh dấu tin nhắn đã đọc
+
 export const markMessagesAsRead = async (req, res) => {
   try {
     const { id: senderId } = req.params;
     const receiverId = req.user._id;
     
-    // Cập nhật tất cả tin nhắn chưa đọc từ người gửi này
+    
     const result = await Message.updateMany(
       {
         senderId,
@@ -74,14 +75,15 @@ export const markMessagesAsRead = async (req, res) => {
   }
 };
 
-// sendMessage now accepts the encrypted bundle including the sender's key
+
+
 export const sendMessage = async (req, res) => {
-  // *** ADDED BACKEND LOGGING HERE ***
+ 
   console.log(`[sendMessage Controller] Received request for receiver ${req.params.id} from sender ${req.user._id}`);
   console.log('[sendMessage Controller] Request Body Received:', req.body);
 
   try {
-    // Destructure the expected fields, including potential file fields
+   
     const {
         encryptedContent, 
         encryptedKey, 
@@ -99,17 +101,17 @@ export const sendMessage = async (req, res) => {
     const { id: receiverId } = req.params;
     const senderId = req.user._id;
 
-    // Validate required fields conditionally
+    
     let missingFields = [];
     if (is_file) {
-        // Validation for file messages
+       
         if (!file_path) missingFields.push('file_path');
         if (!file_iv) missingFields.push('file_iv');
         if (!file_encrypted_key) missingFields.push('file_encrypted_key');
         if (!file_encrypted_key_sender) missingFields.push('file_encrypted_key_sender');
-        // Note: encryptedContent, encryptedKey etc. are allowed to be null for file messages
+        
     } else {
-        // Validation for regular text/image messages
+        
         if (!encryptedContent) missingFields.push('encryptedContent');
         if (!encryptedKey) missingFields.push('encryptedKey');
         if (!encryptedKeySender || typeof encryptedKeySender !== 'string' || encryptedKeySender.length === 0) {
@@ -121,11 +123,11 @@ export const sendMessage = async (req, res) => {
     if (missingFields.length > 0) {
         const errorMsg = `Missing required encrypted data field(s): ${missingFields.join(', ')}.`;
         console.error('[sendMessage Controller] Validation Error:', errorMsg, 'Body was:', req.body); // Log the exact error and body
-        // Return 400 Bad Request
+       
         return res.status(400).json({ error: errorMsg });
     }
 
-    // If validation passes, proceed to create and save message
+    
     const newMessage = new Message({
       senderId,
       receiverId,
@@ -133,7 +135,7 @@ export const sendMessage = async (req, res) => {
       encryptedKey,
       encryptedKeySender,
       iv,
-      // Conditionally add file fields if they exist in the request
+      
       ...(is_file && {
           is_file: true,
           original_file_name,
@@ -144,13 +146,13 @@ export const sendMessage = async (req, res) => {
           file_encrypted_key,
           file_encrypted_key_sender
       }),
-      read: false // Mặc định tin nhắn chưa được đọc
+      read: false 
     });
 
     await newMessage.save();
     console.log(`[sendMessage Controller] Message saved successfully: ${newMessage._id}`);
 
-    // Emit via socket
+    
     const receiverSocketId = getReceiverSocketId(receiverId);
     if (receiverSocketId) {
       io.to(receiverSocketId).emit("newMessage", newMessage);
@@ -159,18 +161,101 @@ export const sendMessage = async (req, res) => {
        console.log(`[sendMessage Controller] Receiver ${receiverId} not connected via socket.`);
     }
     
-    // Cũng gửi tin nhắn về cho người gửi (để cập nhật UI)
+    
     const senderSocketId = getReceiverSocketId(senderId);
     if (senderSocketId && senderSocketId !== receiverSocketId) {
       io.to(senderSocketId).emit("newMessage", newMessage);
     }
 
-    // Respond to sender
+    
     res.status(201).json(newMessage);
 
   } catch (error) {
-    // Log the detailed error on the backend
+    
     console.error("[sendMessage Controller] Error saving or processing message: ", error.message, error.stack);
     res.status(500).json({ error: "Internal server error while sending message." });
   }
+};
+
+
+export const deleteMessage = async (req, res) => {
+    console.log(`[deleteMessage] Received request to delete message: ${req.params.id}`);
+    try {
+        const { id: messageId } = req.params; 
+        const senderId = req.user._id;
+
+        const message = await Message.findById(messageId);
+        if (!message) {
+            console.log(`[deleteMessage] Message ${messageId} not found.`);
+            return res.status(404).json({ error: "Message not found" });
+        }
+        console.log(`[deleteMessage] Found message ${messageId}, sender is ${message.senderId}, receiver is ${message.receiverId}`);
+
+        
+        const receiverId = message.receiverId; 
+
+        if (message.senderId.toString() !== senderId.toString()) {
+            console.log(`[deleteMessage] Unauthorized attempt by ${senderId} to delete message ${messageId}`);
+            return res.status(403).json({ error: "Unauthorized: You can only delete your own messages" });
+        }
+
+        
+        const conversation = await Conversation.findOne({
+            participants: { $all: [senderId, receiverId] } 
+        });
+        console.log(`[deleteMessage] Searching for conversation between ${senderId} and ${receiverId}. Found:`, conversation ? conversation._id : 'None');
+
+        
+        await Message.findByIdAndDelete(messageId);
+        console.log(`[deleteMessage] Successfully deleted message ${messageId} from DB.`);
+
+        
+        if (conversation) {
+           
+            try {
+                conversation.messages.pull(messageId);
+                await conversation.save();
+                console.log(`[deleteMessage] Removed message ${messageId} from conversation ${conversation._id}.`);
+            } catch (convError) {
+                 console.error(`[deleteMessage] Error updating conversation ${conversation._id} after deleting message:`, convError.message);
+                 
+            }
+            
+             const participants = conversation.participants;
+             console.log(`[deleteMessage] Conversation participants:`, participants.map(p => p.toString()));
+
+             participants.forEach(participantId => {
+                 const participantIdStr = participantId.toString();
+                 console.log(`[deleteMessage] Processing participant: ${participantIdStr}`);
+                 const participantSocketId = getReceiverSocketId(participantIdStr);
+                 console.log(`[deleteMessage] Socket ID for ${participantIdStr}: ${participantSocketId || 'Not found'}`);
+                 
+                 if (participantSocketId) {
+                     
+                     io.to(participantSocketId).emit("messageDeleted", { messageId: messageId, conversationId: conversation._id });
+                     console.log(`[deleteMessage] Emitted 'messageDeleted' to socket ${participantSocketId} for message ${messageId}`);
+                 }
+             });
+        } else {
+             console.warn(`[deleteMessage] Could not find conversation between ${senderId} and ${receiverId} to emit delete event.`);
+             
+             const receiverSocketId = getReceiverSocketId(receiverId.toString());
+             if (receiverSocketId) {
+                 io.to(receiverSocketId).emit("messageDeleted", { messageId: messageId, conversationId: null }); // Gửi với conversationId=null
+                 console.log(`[deleteMessage] Emitted 'messageDeleted' directly to receiver ${receiverId} socket ${receiverSocketId} (conversation not found).`);
+             }
+             
+             const senderSocketId = getReceiverSocketId(senderId.toString());
+              if (senderSocketId) {
+                 io.to(senderSocketId).emit("messageDeleted", { messageId: messageId, conversationId: null });
+                 console.log(`[deleteMessage] Emitted 'messageDeleted' directly to sender ${senderId} socket ${senderSocketId} (conversation not found).`);
+             }
+        }
+
+        res.status(200).json({ message: "Message deleted successfully" }); 
+
+    } catch (error) {
+        console.error("Error in deleteMessage controller: ", error.message, error.stack);
+        res.status(500).json({ error: "Internal server error" });
+    }
 };
